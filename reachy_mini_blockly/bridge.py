@@ -26,6 +26,7 @@ import subprocess
 import sys
 import tempfile
 import threading
+import time
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -43,6 +44,12 @@ logger = logging.getLogger("reachy_mini_blockly.bridge")
 DAEMON_URL = "http://localhost:8000"
 DANCES_DATASET = "pollen-robotics/reachy-mini-dances-library"
 EMOTIONS_DATASET = "pollen-robotics/reachy-mini-emotions-library"
+
+# Travel limits, measured on a Mini Lite by walking the daemon past its stops.
+# It saturates silently rather than erroring, so a block asking for 149 deg of
+# body rotation would just quietly get 64. Clamping here lets the route say so.
+HEAD_XYZ_LIMIT_MM = 25.0   # z topped out at ~22mm; x tracked cleanly to 20mm
+BODY_YAW_LIMIT_DEG = 60.0  # hard stop measured at ~+64 / -61.5 deg
 
 # Shared HTTP client (created in lifespan)
 http_client: httpx.AsyncClient = None
@@ -136,6 +143,23 @@ class AntennaRequest(BaseModel):
     left: float = 0.0   # degrees
     right: float = 0.0  # degrees
     duration: float = 0.5
+
+
+class HeadPositionRequest(BaseModel):
+    """Head *translation*, the counterpart to the pitch/yaw/roll block.
+
+    Millimetres rather than the daemon's metres: a block asking for "20" reads
+    better to a student than "0.02", and the whole usable range is under 3cm.
+    """
+    x: float = 0.0  # mm, + is forward
+    y: float = 0.0  # mm, + is left
+    z: float = 0.0  # mm, + is up
+    duration: float = 1.0
+
+
+class BodyYawRequest(BaseModel):
+    angle: float = 0.0  # degrees, + turns left
+    duration: float = 1.0
 
 
 # ── Head direction presets (degrees) ──────────────────────────────────
@@ -319,10 +343,151 @@ async def daemon_post(path: str, json_body: dict = None) -> dict:
         return {"status": "error", "message": str(e)}
 
 
+def clamp(value: float, limit: float) -> float:
+    return max(-limit, min(limit, value))
+
+
+async def present_state() -> dict:
+    """The robot's current pose, or {} if the daemon didn't answer."""
+    state = await daemon_get("/api/state/full")
+    return state if isinstance(state, dict) and "head_pose" in state else {}
+
+
+_HEAD_AXES = ("x", "y", "z", "roll", "pitch", "yaw")
+
+# The last whole-body target the bridge asked the daemon for.
+#
+# Held axes are restated from *this*, not from measured state. Measured state
+# carries servo error and gravity sag, so echoing it back as a command bakes
+# that error into the target -- and it compounds. Rotating the body four times
+# walked the head from -0.5 to -11.6 degrees of yaw before this cache existed.
+# Commanded values don't drift.
+# The cache is only trustworthy while the bridge is the only thing driving the
+# robot. The dashboard, another app or a direct daemon call can move it behind
+# our back, and a stale target would then yank the robot back to a pose nobody
+# asked for. So it expires: a run of blocks fires well inside this window and
+# stays drift-free, while a session picked up later starts from reality.
+_TARGET_TTL = 5.0  # seconds
+
+_last_target: dict = {}
+_last_target_at: float = 0.0
+_last_target_lock = threading.Lock()
+
+
+def _remember_target(goto_body: dict) -> None:
+    global _last_target_at
+    with _last_target_lock:
+        for key in ("head_pose", "antennas", "body_yaw"):
+            if key in goto_body:
+                _last_target[key] = goto_body[key]
+        _last_target_at = time.monotonic()
+
+
+def _fresh_target() -> dict:
+    """The cached target, or {} once it's too old to trust."""
+    with _last_target_lock:
+        if not _last_target or time.monotonic() - _last_target_at > _TARGET_TTL:
+            return {}
+        return dict(_last_target)
+
+
+def _forget_target() -> None:
+    """Drop the cache after a move whose end pose we can't predict.
+
+    Recorded moves (dances, library emotions, wake/sleep) put the robot
+    somewhere we never commanded, so the cache would be a lie. Clearing it
+    makes the next held axis fall back to a fresh reading.
+    """
+    with _last_target_lock:
+        _last_target.clear()
+
+
+async def head_pose_holding(**updates) -> dict:
+    """A full head_pose: the axes in `updates`, the rest left where they are.
+
+    head_pose is all-or-nothing to the daemon -- there's no way to say "rotate
+    but leave the translation alone". A route that only wants to change yaw has
+    to restate x/y/z alongside it, or the head slides back to centre as it
+    turns.
+    """
+    base = dict(_fresh_target().get("head_pose") or {})
+    if not base:  # nothing recent to hold -- ask the robot where it is
+        base = dict((await present_state()).get("head_pose") or {})
+    pose = {axis: float(base.get(axis, 0.0)) for axis in _HEAD_AXES}
+    pose.update({k: v for k, v in updates.items() if v is not None})
+    return pose
+
+
+async def goto_preserving(
+    duration: float,
+    head_pose: Optional[dict] = None,
+    antennas: Optional[list] = None,
+    body_yaw: Optional[float] = None,
+    interpolation: str = "minjerk",
+) -> dict:
+    """Send a goto that holds whatever the caller didn't ask to move.
+
+    The daemon reads a goto as a *whole-body* target: every axis left out of
+    the body is driven back to its default. So a bare antenna goto snaps the
+    head to neutral, cutting off a head move still in flight -- two consecutive
+    blocks cancel each other instead of stacking. Restating the untouched axes
+    keeps them put.
+
+    Held axes come from the last commanded target, falling back to a live
+    reading only when there isn't one yet. If both are unavailable we send just
+    what the caller gave, which is the old behaviour -- no worse than before.
+    """
+    if head_pose is None or antennas is None or body_yaw is None:
+        cached = _fresh_target()
+        head_pose = head_pose if head_pose is not None else cached.get("head_pose")
+        antennas = antennas if antennas is not None else cached.get("antennas")
+        body_yaw = body_yaw if body_yaw is not None else cached.get("body_yaw")
+
+    if head_pose is None or antennas is None or body_yaw is None:
+        state = await present_state()
+        if state:
+            if head_pose is None:
+                head_pose = state.get("head_pose")
+            if antennas is None:
+                antennas = state.get("antennas_position")
+            if body_yaw is None:
+                body_yaw = state.get("body_yaw")
+
+    goto_body: dict = {"duration": duration, "interpolation": interpolation}
+    if head_pose is not None:
+        goto_body["head_pose"] = head_pose
+    if antennas is not None:
+        goto_body["antennas"] = list(antennas)
+    if body_yaw is not None:
+        goto_body["body_yaw"] = body_yaw
+
+    result = await daemon_post("/api/move/goto", goto_body)
+    if isinstance(result, dict) and "uuid" in result:
+        _remember_target(goto_body)
+    return result
+
+
 async def track_move(result: dict):
     """Track a move UUID returned by the daemon for later stopping."""
     if isinstance(result, dict) and "uuid" in result:
         running_move_uuids.append(result["uuid"])
+
+
+async def run_move(result: dict, duration: float) -> Optional[str]:
+    """Track a move and hold the request open until the robot has made it.
+
+    The daemon's goto is fire-and-forget, but Block Console runs blocks one
+    after another and takes the HTTP response as "that block is done". Without
+    this the next block fires immediately and its goto lands on top of one
+    still in flight -- and since a goto is a whole-body target, the loser isn't
+    merely ignored, it gets dragged to the new pose mid-movement.
+    `play_emotion` has always waited for exactly this reason.
+    """
+    await track_move(result)
+    uuid = result.get("uuid")
+    if uuid:
+        await wait_for_move(uuid, timeout=duration + 5.0)
+    return uuid
 
 
 async def wait_for_move(uuid: str, timeout: float = 30.0):
@@ -357,6 +522,9 @@ async def stop_all_running_moves():
     for uuid in running_move_uuids:
         await daemon_post("/api/move/stop", {"uuid": uuid})
     running_move_uuids.clear()
+    # A stopped move leaves the robot mid-trajectory, not at the target we
+    # asked for, so the cached target no longer describes where it is.
+    _forget_target()
 
 
 # ── TTS helpers ───────────────────────────────────────────────────────
@@ -685,32 +853,30 @@ async def _head_tracking_loop():
                     yaw_deg = -(nx / 100.0) * _HEAD_YAW_RANGE
                     pitch_deg = (ny / 100.0) * _HEAD_PITCH_RANGE
 
-                    goto_body = {
-                        "head_pose": {
+                    # Held axes come from the cache, so this stays a single
+                    # request per frame even at tracking rate.
+                    await goto_preserving(
+                        duration=0.3,
+                        head_pose={
                             "x": 0.0, "y": 0.0, "z": 0.0,
                             "roll": 0.0,
                             "pitch": deg2rad(pitch_deg),
                             "yaw": deg2rad(yaw_deg),
                         },
-                        "duration": 0.3,
-                        "interpolation": "minjerk",
-                    }
-                    await daemon_post("/api/move/goto", goto_body)
+                    )
                     last_sent_x = nx
                     last_sent_y = ny
             else:
                 if last_face_time is not None and not returned_to_neutral:
                     elapsed = asyncio.get_event_loop().time() - last_face_time
                     if elapsed >= _FACE_LOST_DELAY:
-                        goto_body = {
-                            "head_pose": {
+                        await goto_preserving(
+                            duration=1.0,
+                            head_pose={
                                 "x": 0.0, "y": 0.0, "z": 0.0,
                                 "roll": 0.0, "pitch": 0.0, "yaw": 0.0,
                             },
-                            "duration": 1.0,
-                            "interpolation": "minjerk",
-                        }
-                        await daemon_post("/api/move/goto", goto_body)
+                        )
                         returned_to_neutral = True
                         last_sent_x = 0.0
                         last_sent_y = 0.0
@@ -811,6 +977,7 @@ async def status():
 @app.post("/wake_up")
 async def wake_up():
     result = await daemon_post("/api/move/play/wake_up")
+    _forget_target()
     await track_move(result)
     return {"status": "ok", "message": "Robot waking up", "uuid": result.get("uuid")}
 
@@ -818,6 +985,7 @@ async def wake_up():
 @app.post("/go_to_sleep")
 async def go_to_sleep():
     result = await daemon_post("/api/move/play/goto_sleep")
+    _forget_target()
     await track_move(result)
     return {"status": "ok", "message": "Robot going to sleep", "uuid": result.get("uuid")}
 
@@ -831,36 +999,66 @@ async def move_head(req: MoveHeadRequest):
         return {"status": "error", "message": f"Unknown direction: {direction}. Use: {', '.join(HEAD_DIRECTIONS.keys())}"}
 
     angles = HEAD_DIRECTIONS[direction]
-    goto_body = {
-        "head_pose": {
-            "x": 0.0, "y": 0.0, "z": 0.0,
-            "roll": deg2rad(angles["roll"]),
-            "pitch": deg2rad(angles["pitch"]),
-            "yaw": deg2rad(angles["yaw"]),
-        },
-        "duration": 1.0,
-        "interpolation": "minjerk",
-    }
-    result = await daemon_post("/api/move/goto", goto_body)
-    await track_move(result)
-    return {"status": "ok", "message": f"Moving head {direction}", "uuid": result.get("uuid")}
+    result = await goto_preserving(
+        duration=1.0,
+        head_pose=await head_pose_holding(
+            roll=deg2rad(angles["roll"]),
+            pitch=deg2rad(angles["pitch"]),
+            yaw=deg2rad(angles["yaw"]),
+        ),
+    )
+    uuid = await run_move(result, 1.0)
+    return {"status": "ok", "message": f"Moving head {direction}", "uuid": uuid}
 
 
 @app.post("/move_head_custom")
 async def move_head_custom(req: MoveHeadCustomRequest):
-    goto_body = {
-        "head_pose": {
-            "x": 0.0, "y": 0.0, "z": 0.0,
-            "roll": deg2rad(req.roll),
-            "pitch": deg2rad(req.pitch),
-            "yaw": deg2rad(req.yaw),
-        },
-        "duration": req.duration,
-        "interpolation": "minjerk",
-    }
-    result = await daemon_post("/api/move/goto", goto_body)
-    await track_move(result)
-    return {"status": "ok", "message": f"Moving head to pitch={req.pitch} yaw={req.yaw} roll={req.roll}", "uuid": result.get("uuid")}
+    result = await goto_preserving(
+        duration=req.duration,
+        head_pose=await head_pose_holding(
+            roll=deg2rad(req.roll),
+            pitch=deg2rad(req.pitch),
+            yaw=deg2rad(req.yaw),
+        ),
+    )
+    uuid = await run_move(result, req.duration)
+    return {"status": "ok", "message": f"Moving head to pitch={req.pitch} yaw={req.yaw} roll={req.roll}", "uuid": uuid}
+
+
+@app.post("/move_head_position")
+async def move_head_position(req: HeadPositionRequest):
+    """Slide the head without turning it: the x/y/z twin of move_head_custom."""
+    x = clamp(req.x, HEAD_XYZ_LIMIT_MM)
+    y = clamp(req.y, HEAD_XYZ_LIMIT_MM)
+    z = clamp(req.z, HEAD_XYZ_LIMIT_MM)
+
+    result = await goto_preserving(
+        duration=req.duration,
+        # mm in the block, metres on the wire.
+        head_pose=await head_pose_holding(x=x / 1000.0, y=y / 1000.0, z=z / 1000.0),
+    )
+    uuid = await run_move(result, req.duration)
+
+    message = f"Moving head to x={x}mm y={y}mm z={z}mm"
+    if (x, y, z) != (req.x, req.y, req.z):
+        message += f" (clamped to ±{HEAD_XYZ_LIMIT_MM:g}mm)"
+    return {"status": "ok", "message": message, "uuid": uuid}
+
+
+# ── Body rotation ─────────────────────────────────────────────────────
+
+@app.post("/set_body_yaw")
+async def set_body_yaw(req: BodyYawRequest):
+    """Turn the body on its base, leaving the head and antennas alone."""
+    angle = clamp(req.angle, BODY_YAW_LIMIT_DEG)
+
+    result = await goto_preserving(duration=req.duration, body_yaw=deg2rad(angle))
+    uuid = await run_move(result, req.duration)
+
+    message = f"Body rotated to {angle}°"
+    if angle != req.angle:
+        message += f" (clamped to ±{BODY_YAW_LIMIT_DEG:g}°)"
+    return {"status": "ok", "message": message, "uuid": uuid}
 
 
 # ── Dance ─────────────────────────────────────────────────────────────
@@ -878,6 +1076,7 @@ async def dance(req: DanceRequest):
             return {"status": "error", "message": "No dances available. Check HF_TOKEN and dataset access."}
 
     result = await daemon_post(f"/api/move/play/recorded-move-dataset/{DANCES_DATASET}/{dance_name}")
+    _forget_target()
     await track_move(result)
     return {"status": "ok", "message": f"Dancing: {dance_name}", "uuid": result.get("uuid")}
 
@@ -939,6 +1138,7 @@ async def play_emotion(req: EmotionRequest):
             f"/api/move/play/recorded-move-dataset/{EMOTIONS_DATASET}/{clip}"
         )
         if "uuid" in result:
+            _forget_target()
             await track_move(result)
             # Block for the duration of the move so consecutive emotion blocks
             # sequence rather than interrupt each other (matches the old
@@ -961,19 +1161,21 @@ async def play_emotion(req: EmotionRequest):
     # Play the sequence of goto moves that make up this emotion
     last_uuid = None
     for step in pose:
-        goto_body = {
-            "head_pose": {
+        antennas = None
+        if "antennas" in step:
+            antennas = [deg2rad(step["antennas"][0]), deg2rad(step["antennas"][1])]
+        # body_yaw is deliberately left out: these are head-and-antenna
+        # animations, so a body the student turned earlier stays put.
+        result = await goto_preserving(
+            duration=step.get("duration", 0.5),
+            head_pose={
                 "x": 0.0, "y": 0.0, "z": 0.0,
                 "roll": deg2rad(step.get("roll", 0)),
                 "pitch": deg2rad(step.get("pitch", 0)),
                 "yaw": deg2rad(step.get("yaw", 0)),
             },
-            "duration": step.get("duration", 0.5),
-            "interpolation": "minjerk",
-        }
-        if "antennas" in step:
-            goto_body["antennas"] = [deg2rad(step["antennas"][0]), deg2rad(step["antennas"][1])]
-        result = await daemon_post("/api/move/goto", goto_body)
+            antennas=antennas,
+        )
         await track_move(result)
         last_uuid = result.get("uuid")
         # Wait for this step to finish before starting the next
@@ -1057,14 +1259,12 @@ async def detect_head():
 
 @app.post("/set_antennas")
 async def set_antennas(req: AntennaRequest):
-    goto_body = {
-        "antennas": [deg2rad(req.left), deg2rad(req.right)],
-        "duration": req.duration,
-        "interpolation": "minjerk",
-    }
-    result = await daemon_post("/api/move/goto", goto_body)
-    await track_move(result)
-    return {"status": "ok", "message": f"Antennas: left={req.left}° right={req.right}°", "uuid": result.get("uuid")}
+    result = await goto_preserving(
+        duration=req.duration,
+        antennas=[deg2rad(req.left), deg2rad(req.right)],
+    )
+    uuid = await run_move(result, req.duration)
+    return {"status": "ok", "message": f"Antennas: left={req.left}° right={req.right}°", "uuid": uuid}
 
 
 # ── Do nothing (idle animation) ───────────────────────────────────────
@@ -1074,19 +1274,21 @@ async def do_nothing():
     pose = EMOTION_POSES["idle"]
     last_uuid = None
     for step in pose:
-        goto_body = {
-            "head_pose": {
+        antennas = None
+        if "antennas" in step:
+            antennas = [deg2rad(step["antennas"][0]), deg2rad(step["antennas"][1])]
+        # body_yaw is deliberately left out: these are head-and-antenna
+        # animations, so a body the student turned earlier stays put.
+        result = await goto_preserving(
+            duration=step.get("duration", 0.5),
+            head_pose={
                 "x": 0.0, "y": 0.0, "z": 0.0,
                 "roll": deg2rad(step.get("roll", 0)),
                 "pitch": deg2rad(step.get("pitch", 0)),
                 "yaw": deg2rad(step.get("yaw", 0)),
             },
-            "duration": step.get("duration", 0.5),
-            "interpolation": "minjerk",
-        }
-        if "antennas" in step:
-            goto_body["antennas"] = [deg2rad(step["antennas"][0]), deg2rad(step["antennas"][1])]
-        result = await daemon_post("/api/move/goto", goto_body)
+            antennas=antennas,
+        )
         await track_move(result)
         last_uuid = result.get("uuid")
         await asyncio.sleep(step.get("duration", 0.5))
