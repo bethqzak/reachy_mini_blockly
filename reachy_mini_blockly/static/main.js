@@ -30,15 +30,36 @@ async function bridgePost(path, body) {
 
 // ── Setup ───────────────────────────────────────────────────
 
+// True once /api/info has answered with a usable payload. Until then the page
+// runs on the defaults above and keeps retrying on the status poll.
+let infoLoaded = false;
+
 async function loadInfo() {
-  const info = await (await fetch("api/info", { cache: "no-store" })).json();
+  if (infoLoaded) return true;
+
+  let info;
+  try {
+    const resp = await fetch("api/info", { cache: "no-store" });
+    // Must check resp.ok: FastAPI answers 404 with valid JSON
+    // ({"detail":"Not Found"}), so an unchecked .json() would happily hand us
+    // an object whose bridge_url is undefined -- and BRIDGE would become the
+    // string "undefined", sending every later call to a 404 on this origin.
+    if (!resp.ok) return false;
+    info = await resp.json();
+  } catch {
+    return false; // settings API not up yet; the retry will catch it
+  }
+
+  if (typeof info.bridge_url !== "string") return false;
+
+  infoLoaded = true;
   BRIDGE = info.bridge_url;
   $("version").textContent = "v" + info.version;
   $("bridgeUrl").textContent = info.bridge_url;
   $("daemonUrl").textContent = info.daemon_url;
   $("consoleLink").href = info.console_url;
   setPill("pillRobot", info.robot_attached && info.media_available);
-  return info;
+  return true;
 }
 
 function setPill(id, state) {
@@ -49,6 +70,9 @@ function setPill(id, state) {
 // ── Status polling ──────────────────────────────────────────
 
 async function refreshStatus() {
+  // If the page was opened while the app was still starting, /api/info would
+  // have 404'd. Keep trying so the page heals instead of staying broken.
+  await loadInfo();
   try {
     const s = await bridgeGet("/status");
     setPill("pillBridge", true);
@@ -170,13 +194,29 @@ $("volume").addEventListener("change", (e) => setVolume(Number(e.target.value)))
 
 $("camToggle").addEventListener("click", toggleCamera);
 
+// This page is embedded in the dashboard, where target="_blank" has nowhere to
+// go -- the host swallows it. Ask the app to open the console in the machine's
+// own browser instead, and fall back to the plain link if that route isn't
+// there (an older build, or the page opened directly on :8042).
+$("consoleLink").addEventListener("click", async (e) => {
+  const href = $("consoleLink").href;
+  e.preventDefault();
+  try {
+    const resp = await fetch("api/open-console", { method: "POST" });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    report("Opening the Block Console in your browser…", true);
+  } catch {
+    if (href.startsWith("http")) window.open(href, "_blank", "noopener");
+    else report("Still waiting on the app — try again in a moment.", false);
+  }
+});
+
 window.addEventListener("beforeunload", () => {
   if (camTimer) clearInterval(camTimer);
 });
 
 (async function start() {
-  await loadInfo();
-  await refreshStatus();
+  await refreshStatus(); // loads /api/info first, then polls the bridge
   await loadVolume();
   setInterval(refreshStatus, 3000);
 })();

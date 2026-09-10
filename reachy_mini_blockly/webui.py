@@ -22,6 +22,8 @@ handed us a robot.
 # parameters annotated with FastAPI types degrade into query params.
 
 import logging
+import threading
+import webbrowser
 
 from fastapi import FastAPI
 
@@ -57,3 +59,24 @@ def register_routes(settings_app: FastAPI, reachy_mini) -> None:
             "robot_attached": bridge._connect_reachy_mini() is not None,
             "media_available": media is not None,
         }
+
+    @settings_app.post("/api/open-console")
+    def open_console() -> dict:
+        """Open the Block Console in a new window of the default browser.
+
+        The settings page is embedded in the dashboard, which gives a
+        target="_blank" link nowhere to go. Opening from this side gets a real
+        browser window. That the browser lands on *this* machine is the right
+        answer anyway: the console talks to the bridge on localhost, so it only
+        ever works from here.
+        """
+        def _open() -> None:
+            try:
+                webbrowser.open_new(BLOCK_CONSOLE_URL)
+            except Exception:
+                log.exception("Could not open the Block Console")
+
+        # Launching a browser can block for a second or two; don't hold the
+        # request open while it happens.
+        threading.Thread(target=_open, name="open_console", daemon=True).start()
+        return {"status": "ok", "url": BLOCK_CONSOLE_URL}
