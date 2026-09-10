@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+# Underscored deliberately. `reachy-mini-app-assistant check` wants the entry
+# point key to equal this name, while the daemon reads custom_app_url from
+# `site-packages/<entry point name>/main.py` — so the entry point name has to be
+# the package directory name too. Underscores everywhere is the only spelling
+# that satisfies both; a hyphenated name silently loses the settings page.
+name = "reachy_mini_blockly"
+version = "1.0.0"
+description = "Block coding for Reachy Mini. Runs the bridge the WADSIH Block Console talks to, so students can drive the robot from drag-and-drop blocks."
+readme = "README.md"
+# reachy-mini 1.9.0+ requires Python >= 3.11.
+requires-python = ">=3.11"
+license = { text = "Apache-2.0" }
+authors = [{ name = "Beth Cusack" }]
+keywords = ["reachy", "reachy-mini", "robot", "blockly", "block-coding", "education", "wadsih"]
+
+dependencies = [
+    "reachy-mini",
+    "fastapi",
+    "uvicorn",
+    "httpx",
+    "numpy>=1.24",
+    # <5: OpenCV 5 removed cv2.CascadeClassifier / cv2.data.haarcascades, which
+    # the face-tracking blocks depend on.
+    "opencv-python>=4.8,<5",
+    "edge-tts",   # primary TTS: free Microsoft neural voices, no API key
+    "pyttsx3",    # fallback TTS on Linux when edge-tts has no internet
+]
+
+[project.optional-dependencies]
+dev = ["ruff", "pyflakes"]
+
+# This is the entry point the Reachy Mini daemon uses to discover the app.
+# Group name MUST be "reachy_mini_apps" (with underscores).
+# The entry point name MUST match the package dir, the pip distribution and the
+# Space name: the daemon uses it verbatim for pip uninstall, update checks
+# (dist-info lookup) and custom_app_url discovery (site-packages/<name>/main.py).
+# The class name is likewise fixed — the checker derives it by CamelCasing the
+# package name, so it has to be ReachyMiniBlockly.
+[project.entry-points."reachy_mini_apps"]
+reachy_mini_blockly = "reachy_mini_blockly.main:ReachyMiniBlockly"
+
+[tool.setuptools]
+packages = ["reachy_mini_blockly"]
+
+[tool.setuptools.package-data]
+reachy_mini_blockly = ["static/*"]

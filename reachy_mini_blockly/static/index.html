@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Reachy Blocks — Settings</title>
+  <!-- The SDK serves this page at "/" but mounts assets under "/static/". -->
+  <link rel="stylesheet" href="static/style.css" />
+</head>
+<body>
+  <div class="wrap">
+
+    <header>
+      <div class="title">
+        <span class="brick">🧩</span>
+        <div>
+          <h1>Reachy Blocks</h1>
+          <div class="sub">Block coding for Reachy Mini · <span id="version">…</span></div>
+        </div>
+      </div>
+    </header>
+
+    <section class="card cta">
+      <p class="lead">The bridge is running. Open the Block Console to start building.</p>
+      <a id="consoleLink" class="btn primary" href="#" target="_blank" rel="noopener">
+        Open Block Console ↗
+      </a>
+      <p class="hint">
+        Opens in a new tab. Pick the <strong>Reachy Mini</strong> block category,
+        and your blocks will drive this robot.
+      </p>
+    </section>
+
+    <section class="card">
+      <h2>Status</h2>
+      <div class="pills">
+        <span class="pill" id="pillBridge"><span class="dot wait"></span>Bridge</span>
+        <span class="pill" id="pillDaemon"><span class="dot wait"></span>Daemon</span>
+        <span class="pill" id="pillRobot"><span class="dot wait"></span>Robot</span>
+      </div>
+      <p class="hint" id="statusHint">Checking…</p>
+      <dl class="kv">
+        <dt>Bridge</dt><dd id="bridgeUrl">—</dd>
+        <dt>Daemon</dt><dd id="daemonUrl">—</dd>
+      </dl>
+    </section>
+
+    <section class="card">
+      <h2>Try it out</h2>
+      <p class="hint">These call the same bridge the Block Console uses, so if they
+        work here they will work in your blocks.</p>
+
+      <div class="row">
+        <input id="sayText" type="text" value="Hello, I am Reachy Mini!"
+               aria-label="Text for the robot to say" />
+        <button class="btn" data-act="say">Say it</button>
+      </div>
+
+      <div class="row buttons">
+        <button class="btn" data-act="wake">Wake up</button>
+        <button class="btn" data-act="sleep">Go to sleep</button>
+        <button class="btn" data-act="sound">Test sound</button>
+      </div>
+
+      <div class="row">
+        <label for="volume">Volume</label>
+        <input id="volume" type="range" min="0" max="100" value="50" />
+        <output id="volumeOut">50</output>
+      </div>
+
+      <p class="result" id="result" role="status"></p>
+    </section>
+
+    <section class="card">
+      <h2>Camera</h2>
+      <div class="row buttons">
+        <button class="btn" id="camToggle">Start preview</button>
+      </div>
+      <div class="preview">
+        <img id="camImage" alt="Live camera preview from Reachy Mini" hidden />
+        <p class="hint" id="camHint">Preview is off.</p>
+      </div>
+    </section>
+
+    <section class="card note">
+      <h2>If the console can't find your robot</h2>
+      <p>
+        The Block Console reaches this bridge at
+        <code>http://localhost:8080</code>, so the browser has to be on the
+        <strong>same computer</strong> that is running the robot's daemon and
+        this app. That is the normal setup for a Reachy Mini Lite plugged into
+        your machine.
+      </p>
+      <p>
+        Use <strong>Chrome</strong> or <strong>Edge</strong>. Safari blocks
+        plain-HTTP requests from an HTTPS page with no way to allow them, so the
+        blocks will silently fail there.
+      </p>
+    </section>
+
+  </div>
+  <script src="static/main.js"></script>
+</body>
+</html>
