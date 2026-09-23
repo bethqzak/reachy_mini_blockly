@@ -488,15 +488,21 @@ async def goto_preserving(
 ) -> dict:
     """Send a goto that holds whatever the caller didn't ask to move.
 
-    The daemon reads a goto as a *whole-body* target: every axis left out of
-    the body is driven back to its default. So a bare antenna goto snaps the
-    head to neutral, cutting off a head move still in flight -- two consecutive
-    blocks cancel each other instead of stacking. Restating the untouched axes
-    keeps them put.
+    The daemon reads a goto as a *whole-body* target: an axis left out of the
+    body is filled in with its *measured* position and commanded there for the
+    whole move. Measured isn't commanded -- the head hangs a little below its
+    target under its own weight -- so a bare antenna goto quietly re-targets
+    the head to wherever it has sagged to, and cuts off a head move still in
+    flight. Restating the untouched axes from the last commanded target keeps
+    them put.
 
     Held axes come from the last commanded target, falling back to a live
     reading only when there isn't one yet. If both are unavailable we send just
     what the caller gave, which is the old behaviour -- no worse than before.
+
+    Note the goto still *starts* every axis from its measured position, so a
+    goto that only means to move the antennas or body still nudges the head
+    (see slide_to). Use this for moves that involve the head.
     """
     if head_pose is None or antennas is None or body_yaw is None:
         cached = _fresh_target()
@@ -526,6 +532,168 @@ async def goto_preserving(
     if isinstance(result, dict) and "uuid" in result:
         _remember_target(goto_body)
     return result
+
+
+# ── Moves that leave the head alone ───────────────────────────────────
+#
+# The daemon's goto builds its trajectory from the *measured* head pose (the
+# forward kinematics of where the motors actually are), not from the pose it
+# was last told to hold. Under its own weight the head sits a little below
+# its commanded target, so every goto begins by commanding the head to where
+# it has sagged to and runs the trajectory from there. A head move hides that:
+# the head was leaving anyway. An antenna-only or body-only goto doesn't. The
+# head is meant to stay still, and instead it dips to the sagged pose and
+# climbs back to its target over the move (goto_preserving restates the
+# target) -- the little jerk seen on the antenna block.
+#
+# So moves that don't involve the head avoid goto altogether. They stream the
+# daemon's set_target, which changes only the axes it's given and leaves the
+# head's commanded target exactly as it was. set_target is instantaneous, so
+# the bridge does the easing itself: the same min-jerk curve the daemon uses,
+# sampled at STREAM_HZ over the requested duration.
+
+STREAM_HZ = 50.0
+
+# Bumped by stop. A stream in progress notices and quits, since it has no
+# daemon-side uuid for stop to cancel.
+_stream_generation = 0
+
+
+def _minjerk(t: float) -> float:
+    """The daemon's own easing curve (reachy_mini.utils.interpolation)."""
+    return 10 * t**3 - 15 * t**4 + 6 * t**5
+
+
+async def commanded_targets() -> dict:
+    """Antennas and body yaw as the daemon is holding them right now.
+
+    From the bridge's own cache while it's fresh, else the daemon's targets
+    (what it's commanding, not what the motors measure), else the measured
+    position as a last resort. Returns {"antennas": [l, r], "body_yaw": f};
+    a key is missing if nothing at all could be found for it.
+    """
+    found = {k: v for k, v in _fresh_target().items() if k in ("antennas", "body_yaw")}
+    if "antennas" in found and "body_yaw" in found:
+        return found
+
+    state = await daemon_get(
+        "/api/state/full?with_control_mode=false&with_head_pose=false"
+        "&with_target_antenna_positions=true&with_target_body_yaw=true"
+    )
+    if isinstance(state, dict) and state.get("status") != "error":
+        if "antennas" not in found:
+            pair = state.get("target_antennas_position") or state.get("antennas_position")
+            if pair:
+                found["antennas"] = [float(v) for v in pair]
+        if "body_yaw" not in found:
+            yaw = state.get("target_body_yaw")
+            if yaw is None:
+                yaw = state.get("body_yaw")
+            if yaw is not None:
+                found["body_yaw"] = float(yaw)
+    return found
+
+
+async def daemon_idle(timeout: float = 10.0) -> bool:
+    """Wait for the daemon to have no move running. False if it still does."""
+    waited = 0.0
+    while waited < timeout:
+        running = await daemon_get("/api/move/running")
+        if not isinstance(running, list) or not running:
+            return True
+        await asyncio.sleep(0.1)
+        waited += 0.1
+    return False
+
+
+async def slide_to(
+    duration: float,
+    antennas: Optional[list] = None,
+    body_yaw: Optional[float] = None,
+) -> dict:
+    """Ease the antennas and/or body to a target without touching the head.
+
+    Returns {"status": "ok"} once the target is reached, {"status": "stopped"}
+    if a stop cut it short, or the daemon's refusal if it wouldn't take the
+    targets (it ignores set_target while a move is running, so this waits for
+    the daemon to go quiet and tries once more before giving up).
+    """
+    for attempt in range(2):
+        result = await _stream_targets(duration, antennas, body_yaw)
+        if result.get("status") != "ignored" or attempt:
+            return result
+        # A move is running -- a wake-up, a dance -- and set_target won't
+        # fight it. Let it finish, then go.
+        if not await daemon_idle():
+            return result
+    return result  # unreachable, keeps the type checker happy
+
+
+async def _stream_targets(
+    duration: float,
+    antennas: Optional[list],
+    body_yaw: Optional[float],
+) -> dict:
+    generation = _stream_generation
+    start = await commanded_targets()
+    antennas_from = start.get("antennas") if antennas is not None else None
+    yaw_from = start.get("body_yaw") if body_yaw is not None else None
+
+    steps = max(1, int(round(duration * STREAM_HZ)))
+    t0 = time.monotonic()
+    for i in range(1, steps + 1):
+        s = _minjerk(i / steps)
+        body: dict = {}
+        if antennas is not None:
+            body["target_antennas"] = (
+                [a + (b - a) * s for a, b in zip(antennas_from, antennas)]
+                if antennas_from else list(antennas)
+            )
+        if body_yaw is not None:
+            body["target_body_yaw"] = (
+                yaw_from + (body_yaw - yaw_from) * s
+                if yaw_from is not None else body_yaw
+            )
+
+        result = await daemon_post("/api/move/set_target", body)
+        if not isinstance(result, dict) or result.get("status") != "ok":
+            return result if isinstance(result, dict) else {"status": "error", "message": str(result)}
+        if _stream_generation != generation:
+            return {"status": "stopped"}
+
+        # Hold the pace against the clock, so slow posts don't stretch the
+        # move; if we're behind, just send the next sample.
+        due = t0 + duration * i / steps
+        remaining = due - time.monotonic()
+        if remaining > 0:
+            await asyncio.sleep(remaining)
+
+    final: dict = {}
+    if antennas is not None:
+        final["antennas"] = list(antennas)
+    if body_yaw is not None:
+        final["body_yaw"] = body_yaw
+    _remember_target(final)
+    return {"status": "ok"}
+
+
+async def move_without_head(
+    duration: float,
+    antennas: Optional[list] = None,
+    body_yaw: Optional[float] = None,
+) -> Optional[str]:
+    """Move the antennas and/or body, keeping the head still.
+
+    Streams set_target (see slide_to). If the daemon won't take that, falls
+    back to a goto so the block still does something. Returns the goto's uuid
+    in that case; a stream has none.
+    """
+    result = await slide_to(duration, antennas=antennas, body_yaw=body_yaw)
+    if result.get("status") in ("ok", "stopped"):
+        return None
+    logger.warning(f"set_target stream refused ({result}); falling back to goto")
+    result = await goto_preserving(duration=duration, antennas=antennas, body_yaw=body_yaw)
+    return await run_move(result, duration)
 
 
 async def track_move(result: dict):
@@ -573,6 +741,9 @@ async def wait_for_move(uuid: str, timeout: float = 30.0):
 
 async def stop_all_running_moves():
     """Stop all currently running moves."""
+    global _stream_generation
+    # A bridge-side stream (slide_to) has no uuid; it watches this instead.
+    _stream_generation += 1
     # First check what's actually running
     running = await daemon_get("/api/move/running")
     if isinstance(running, list):
@@ -1113,8 +1284,7 @@ async def set_body_yaw(req: BodyYawRequest):
     """Turn the body on its base, leaving the head and antennas alone."""
     angle = clamp(req.angle, BODY_YAW_LIMIT_DEG)
 
-    result = await goto_preserving(duration=req.duration, body_yaw=deg2rad(angle))
-    uuid = await run_move(result, req.duration)
+    uuid = await move_without_head(req.duration, body_yaw=deg2rad(angle))
 
     message = f"Body rotated to {angle}°"
     if angle != req.angle:
@@ -1172,13 +1342,17 @@ async def move_together(req: MoveTogetherRequest):
     if not moved:
         return {"status": "ok", "message": "Nothing to move", "uuid": None}
 
-    result = await goto_preserving(
-        duration=req.duration,
-        head_pose=head_pose,
-        antennas=antennas,
-        body_yaw=body_yaw,
-    )
-    uuid = await run_move(result, req.duration)
+    if head_pose is None:
+        # Antennas and/or body only: keep the head out of it entirely.
+        uuid = await move_without_head(req.duration, antennas=antennas, body_yaw=body_yaw)
+    else:
+        result = await goto_preserving(
+            duration=req.duration,
+            head_pose=head_pose,
+            antennas=antennas,
+            body_yaw=body_yaw,
+        )
+        uuid = await run_move(result, req.duration)
 
     message = "Moving together: " + ", ".join(moved)
     if clamped:
@@ -1384,11 +1558,10 @@ async def detect_head():
 
 @app.post("/set_antennas")
 async def set_antennas(req: AntennaRequest):
-    result = await goto_preserving(
-        duration=req.duration,
-        antennas=[deg2rad(req.left), deg2rad(req.right)],
+    """Move the antennas and nothing else -- the head must not so much as twitch."""
+    uuid = await move_without_head(
+        req.duration, antennas=[deg2rad(req.left), deg2rad(req.right)]
     )
-    uuid = await run_move(result, req.duration)
     return {"status": "ok", "message": f"Antennas: left={req.left}° right={req.right}°", "uuid": uuid}
 
 
