@@ -36,7 +36,16 @@ class ReachyMiniBlockly(ReachyMiniApp):
     """Serve the Block Console bridge for as long as the app is running."""
 
     # Settings page served from static/ and embedded in the dashboard.
-    custom_app_url: str | None = "http://0.0.0.0:8042"
+    #
+    # localhost, not the 0.0.0.0 the app template ships with: the SDK uses this
+    # one string as both the uvicorn bind host *and* the address it hands the
+    # browser (see ReachyMiniApp.wrapped_run). 0.0.0.0 is a fine thing to bind
+    # to and not an address you can browse to -- Chrome has blocked requests to
+    # it since v128 -- so the page would load but every fetch out of it failed,
+    # its own same-origin /api/info included. Binding to localhost costs
+    # nothing here: the Block Console only ever talks to the bridge over
+    # localhost anyway, so the browser has to be on this machine regardless.
+    custom_app_url: str | None = "http://localhost:8042"
 
     # "default" lets the SDK pick a backend with camera and audio. The camera
     # blocks and face tracking need video, so don't downgrade this to
