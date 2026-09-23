@@ -4,7 +4,14 @@ Reachy Mini Bridge Server for the Block Console.
 A CORS-open FastAPI server that proxies the Block Console
 (https://wadsih-liftoff.org/tools/blocks.html?preset=reachy) to the Reachy Mini
 daemon REST API on localhost:8000, adding the few things the daemon has no
-route for: text-to-speech, camera snapshots and OpenCV face tracking.
+route for: text-to-speech and camera snapshots. Face tracking is also done
+here, with OpenCV, even though the daemon has had its own tracker since SDK
+1.9 (POST /api/media/tracking/enable, GET /api/media/tracking/face): the
+blocks need face coordinates as well as a head that follows, and the daemon's
+FaceTarget only reports them while its tracker is driving the head.
+
+Verified against reachy-mini 1.11.0: every daemon route and SDK attribute used
+below is unchanged from 1.10.0.
 
 This module is the app's engine, not its entry point — `main.BlocklyApp` starts
 it with `run_bridge()` and hands it the live `ReachyMini` the app framework
@@ -51,6 +58,11 @@ EMOTIONS_DATASET = "pollen-robotics/reachy-mini-emotions-library"
 HEAD_XYZ_LIMIT_MM = 25.0   # z topped out at ~22mm; x tracked cleanly to 20mm
 BODY_YAW_LIMIT_DEG = 60.0  # hard stop measured at ~+64 / -61.5 deg
 
+# How long a move takes when the block doesn't say. Short, so blocks feel
+# snappy and a run of them doesn't crawl; a block that wants a glide passes
+# its own duration.
+DEFAULT_MOVE_DURATION = 0.5  # seconds
+
 # Shared HTTP client (created in lifespan)
 http_client: httpx.AsyncClient = None
 
@@ -86,6 +98,13 @@ _cv_cap_lock = threading.Lock()
 _use_direct_cv = False  # set True after SDK IPC fails
 
 # ── Head tracking state ──────────────────────────────────────────────
+# In-app tracker. The daemon's own (SDK 1.9+, /api/media/tracking/*) would be
+# lighter and, since 1.11, aims 15 deg lower to look at faces rather than
+# hairlines -- but it exposes the face only while it holds the head, and the
+# on-demand `detect_head` block needs a detection without moving anything.
+# Swapping the enable/disable half over to the daemon while keeping OpenCV for
+# the coordinate blocks is the obvious next step once it can be tried on a
+# robot.
 _head_tracking_enabled = False
 _head_tracking_task = None
 _face_detected = False
@@ -112,7 +131,7 @@ class MoveHeadCustomRequest(BaseModel):
     pitch: float = 0.0  # degrees, up/down
     yaw: float = 0.0    # degrees, left/right
     roll: float = 0.0   # degrees, tilt
-    duration: float = 1.0
+    duration: float = DEFAULT_MOVE_DURATION
 
 
 class EmotionRequest(BaseModel):
@@ -142,7 +161,7 @@ class SetCameraRequest(BaseModel):
 class AntennaRequest(BaseModel):
     left: float = 0.0   # degrees
     right: float = 0.0  # degrees
-    duration: float = 0.5
+    duration: float = DEFAULT_MOVE_DURATION
 
 
 class HeadPositionRequest(BaseModel):
@@ -154,12 +173,36 @@ class HeadPositionRequest(BaseModel):
     x: float = 0.0  # mm, + is forward
     y: float = 0.0  # mm, + is left
     z: float = 0.0  # mm, + is up
-    duration: float = 1.0
+    duration: float = DEFAULT_MOVE_DURATION
 
 
 class BodyYawRequest(BaseModel):
     angle: float = 0.0  # degrees, + turns left
-    duration: float = 1.0
+    duration: float = DEFAULT_MOVE_DURATION
+
+
+class MoveTogetherRequest(BaseModel):
+    """Every axis the single-purpose blocks take, in one goto.
+
+    The daemon animates a goto's head, antennas and body together over one
+    duration, so this is how "antennas *and* head at the same time" is done.
+    Two separate blocks can't do it: the second goto takes over every axis of
+    the first (see goto_preserving).
+
+    Every field is optional. An axis left out holds where the last block put
+    it, exactly as the single-axis routes do. Units match those routes:
+    degrees for rotations and antennas, millimetres for head translation.
+    """
+    pitch: Optional[float] = None    # head, degrees
+    yaw: Optional[float] = None      # head, degrees
+    roll: Optional[float] = None     # head, degrees
+    x: Optional[float] = None        # head, mm
+    y: Optional[float] = None        # head, mm
+    z: Optional[float] = None        # head, mm
+    left: Optional[float] = None     # antenna, degrees
+    right: Optional[float] = None    # antenna, degrees
+    body_yaw: Optional[float] = None # degrees
+    duration: float = DEFAULT_MOVE_DURATION
 
 
 # ── Head direction presets (degrees) ──────────────────────────────────
@@ -416,6 +459,24 @@ async def head_pose_holding(**updates) -> dict:
     pose = {axis: float(base.get(axis, 0.0)) for axis in _HEAD_AXES}
     pose.update({k: v for k, v in updates.items() if v is not None})
     return pose
+
+
+async def antennas_holding(left: Optional[float] = None,
+                           right: Optional[float] = None) -> list:
+    """A full [left, right] antenna pair (radians), holding whichever is None.
+
+    The antenna counterpart of head_pose_holding: the daemon wants both
+    antennas in every goto, so moving just one means restating the other.
+    """
+    base = _fresh_target().get("antennas")
+    if not base:  # nothing recent to hold -- ask the robot where it is
+        base = (await present_state()).get("antennas_position")
+    pair = [float(v) for v in base] if base else [0.0, 0.0]
+    if left is not None:
+        pair[0] = left
+    if right is not None:
+        pair[1] = right
+    return pair
 
 
 async def goto_preserving(
@@ -1000,14 +1061,14 @@ async def move_head(req: MoveHeadRequest):
 
     angles = HEAD_DIRECTIONS[direction]
     result = await goto_preserving(
-        duration=1.0,
+        duration=DEFAULT_MOVE_DURATION,
         head_pose=await head_pose_holding(
             roll=deg2rad(angles["roll"]),
             pitch=deg2rad(angles["pitch"]),
             yaw=deg2rad(angles["yaw"]),
         ),
     )
-    uuid = await run_move(result, 1.0)
+    uuid = await run_move(result, DEFAULT_MOVE_DURATION)
     return {"status": "ok", "message": f"Moving head {direction}", "uuid": uuid}
 
 
@@ -1058,6 +1119,70 @@ async def set_body_yaw(req: BodyYawRequest):
     message = f"Body rotated to {angle}°"
     if angle != req.angle:
         message += f" (clamped to ±{BODY_YAW_LIMIT_DEG:g}°)"
+    return {"status": "ok", "message": message, "uuid": uuid}
+
+
+# ── Combined move ─────────────────────────────────────────────────────
+
+@app.post("/move_together")
+async def move_together(req: MoveTogetherRequest):
+    """Move any mix of head, antennas and body in one goto, all at once.
+
+    Fields left out hold their last commanded position, so this route does
+    everything the single-axis routes do, plus lets them happen together.
+    """
+    moved: list[str] = []
+    clamped: list[str] = []
+
+    head_updates: dict = {}
+    for axis in ("pitch", "yaw", "roll"):
+        value = getattr(req, axis)
+        if value is not None:
+            head_updates[axis] = deg2rad(value)
+            moved.append(f"{axis}={value:g}°")
+    for axis in ("x", "y", "z"):
+        value = getattr(req, axis)
+        if value is not None:
+            limited = clamp(value, HEAD_XYZ_LIMIT_MM)
+            if limited != value:
+                clamped.append(f"head {axis} to ±{HEAD_XYZ_LIMIT_MM:g}mm")
+            head_updates[axis] = limited / 1000.0  # mm in the block, metres on the wire
+            moved.append(f"{axis}={limited:g}mm")
+    head_pose = await head_pose_holding(**head_updates) if head_updates else None
+
+    antennas = None
+    if req.left is not None or req.right is not None:
+        antennas = await antennas_holding(
+            left=deg2rad(req.left) if req.left is not None else None,
+            right=deg2rad(req.right) if req.right is not None else None,
+        )
+        if req.left is not None:
+            moved.append(f"left={req.left:g}°")
+        if req.right is not None:
+            moved.append(f"right={req.right:g}°")
+
+    body_yaw = None
+    if req.body_yaw is not None:
+        limited = clamp(req.body_yaw, BODY_YAW_LIMIT_DEG)
+        if limited != req.body_yaw:
+            clamped.append(f"body to ±{BODY_YAW_LIMIT_DEG:g}°")
+        body_yaw = deg2rad(limited)
+        moved.append(f"body={limited:g}°")
+
+    if not moved:
+        return {"status": "ok", "message": "Nothing to move", "uuid": None}
+
+    result = await goto_preserving(
+        duration=req.duration,
+        head_pose=head_pose,
+        antennas=antennas,
+        body_yaw=body_yaw,
+    )
+    uuid = await run_move(result, req.duration)
+
+    message = "Moving together: " + ", ".join(moved)
+    if clamped:
+        message += " (clamped " + "; ".join(clamped) + ")"
     return {"status": "ok", "message": message, "uuid": uuid}
 
 

@@ -12,12 +12,20 @@ name = "reachy_mini_blockly"
 version = "1.0.0"
 description = "Block coding for Reachy Mini. Runs the bridge the WADSIH Block Console talks to, so students can drive the robot from drag-and-drop blocks."
 readme = "README.md"
-# reachy-mini 1.9.0+ requires Python >= 3.11.
+# reachy-mini 1.9.0+ requires Python >= 3.11 (still true of 1.11.0).
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [{ name = "Beth Cusack" }]
 keywords = ["reachy", "reachy-mini", "robot", "blockly", "block-coding", "education", "wadsih"]
 
+# Verified against reachy-mini 1.11.0 (2026-09-11). Every daemon route and SDK
+# attribute the bridge touches is unchanged from 1.10.0. Deliberately not
+# pinned: on a wireless robot the daemon keeps the apps venv's SDK in step with
+# its own version, and a floor here would fight that.
+#
+# reachy-mini 1.11.0 dropped scipy as a runtime dependency. Nothing here uses
+# it (rotations are plain degrees-to-radians), so it is *not* declared. Add it
+# only if a block ever needs scipy directly.
 dependencies = [
     "reachy-mini",
     "fastapi",

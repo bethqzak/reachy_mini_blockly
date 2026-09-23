@@ -34,6 +34,7 @@ Python, no terminal and no install steps beyond adding this app.
 | 😊 **Emotions** | Play any of the 81 clips in the official Reachy emotions library, with audio |
 | 💃 **Dances** | Play from the Pollen dances library |
 | 🙂 **Head & antennas** | Preset directions, or exact pitch/yaw/roll with a duration |
+| 🤸 **Move together** | Head, antennas and body in one smooth move, all at the same time |
 | 🗣️ **Speech** | Text to speech through the robot's speaker (neural voices via edge-tts) |
 | 📸 **Camera** | Grab a snapshot as an image the console can display |
 | 👀 **Face tracking** | OpenCV face detection; the head follows the nearest face |
@@ -60,6 +61,9 @@ No API keys, no accounts. The emotions and dances datasets are public, so no
 ---
 
 ## Requirements, and one important limitation
+
+**Reachy Mini SDK 1.9.0 or newer**, which means Python 3.11 or newer in the
+apps venv. Tested with 1.11.0.
 
 **The browser must be on the same computer as the robot's daemon.**
 
@@ -90,8 +94,15 @@ wadsih-liftoff.org        →      bridge  :8080  ──→  daemon REST  :8000 
 
 The bridge is a CORS-open FastAPI server. Almost every block becomes a proxied
 call to the daemon's own REST API, which is what keeps this thin and keeps it
-working across SDK upgrades. Only the things the daemon has no route for are
-implemented here: text to speech, camera snapshots and face tracking.
+working across SDK upgrades. Only text to speech and camera snapshots are
+implemented here, because the daemon has no route for them. Face tracking is
+also done in-app (OpenCV on frames from the app's robot handle) even though
+the daemon has shipped its own tracker since SDK 1.9: the in-app tracker also
+feeds the "face detected?" and "face position" blocks, which need the face
+coordinates, not just a robot that looks at you.
+
+Verified against reachy-mini **1.11.0**. That release is mostly faster imports
+and boots; nothing the bridge calls changed.
 
 Motion goes through the daemon's REST API rather than the SDK, which the
 robot's app lock does not gate — so the bridge and the app framework never
