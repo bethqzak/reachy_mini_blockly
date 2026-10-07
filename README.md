@@ -92,7 +92,9 @@ wadsih-liftoff.org        →      bridge  :8080  ──→  daemon REST  :8000 
                                  settings page :8042
 ```
 
-The bridge is a CORS-open FastAPI server. Almost every block becomes a proxied
+The bridge is a FastAPI server that listens on `localhost` only and answers
+only to the Block Console and to pages served from the same computer (such as
+the settings page). Almost every block becomes a proxied
 call to the daemon's own REST API, which is what keeps this thin and keeps it
 working across SDK upgrades. Only text to speech and camera snapshots are
 implemented here, because the daemon has no route for them. Face tracking is

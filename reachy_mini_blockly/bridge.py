@@ -1,7 +1,7 @@
 """
 Reachy Mini Bridge Server for the Block Console.
 
-A CORS-open FastAPI server that proxies the Block Console
+A loopback-only FastAPI server that proxies the Block Console
 (https://wadsih-liftoff.org/tools/blocks.html?preset=reachy) to the Reachy Mini
 daemon REST API on localhost:8000, adding the few things the daemon has no
 route for: text-to-speech and camera snapshots. Face tracking is also done
@@ -28,6 +28,7 @@ import concurrent.futures
 import logging
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -42,6 +43,8 @@ import numpy as np
 import uvicorn
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.trustedhost import TrustedHostMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 logger = logging.getLogger("reachy_mini_blockly.bridge")
@@ -82,6 +85,8 @@ _tts_executor: concurrent.futures.ThreadPoolExecutor = None
 _tts_engine = None
 _edge_tts_available = False
 _EDGE_TTS_VOICE = "en-US-AriaNeural"  # natural-sounding female voice
+# Carries the text to the Windows SAPI fallback (see _tts_speak_fallback).
+_SAY_TEXT_ENV = "REACHY_BLOCKS_SAY_TEXT"
 
 # ── Reachy Mini SDK handle (for camera) ──────────────────────────────
 # Injected by main.BlocklyApp via set_robot(). Unlike the desktop build, the
@@ -850,18 +855,25 @@ def _tts_speak_fallback(text: str) -> dict:
         return {"status": "error", "message": "TTS not available"}
     try:
         if _tts_engine == "macos_say":
-            subprocess.run(["say", text], check=True, timeout=30)
+            # "--" ends option parsing, so text starting with a dash is spoken
+            # rather than read as a flag (`-o <path>` writes a file).
+            subprocess.run(["say", "--", text], check=True, timeout=30)
         elif _tts_engine == "windows_sapi":
-            safe_text = text.replace("'", "''")
+            # The text travels in an environment variable, never in the
+            # command string. Escaping it into a quoted literal can't be made
+            # safe: PowerShell takes curly quotes (’ ‘) as string delimiters
+            # too, so "don’t" typed with a smart apostrophe ended the string
+            # and the rest of the sentence ran as code.
             ps_cmd = (
                 "Add-Type -AssemblyName System.Speech; "
                 "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; "
-                f"$s.Speak('{safe_text}')"
+                f"$s.Speak($env:{_SAY_TEXT_ENV})"
             )
             subprocess.run(
                 ["powershell", "-NoProfile", "-Command", ps_cmd],
                 check=True, timeout=30,
                 creationflags=_NO_WINDOW,
+                env={**os.environ, _SAY_TEXT_ENV: text},
             )
         else:
             _tts_engine.say(text)
@@ -1171,13 +1183,68 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Reachy Mini Bridge", lifespan=lifespan)
 
+# ── Who may call the bridge ───────────────────────────────────────────
+#
+# The bridge moves a robot, speaks and hands out camera frames, so it answers
+# only to pages that are meant to drive it: the Block Console (live and its
+# preview builds) and anything served from this machine (the settings page on
+# :8042, a console under local development).
+#
+# CORS headers alone don't do that. They stop a page *reading* a reply, but a
+# body-less POST such as /wake_up is a "simple" request the browser sends
+# without asking first. So requests from any other origin are refused outright
+# (refuse_foreign_origins below), and the CORS middleware is left to tell the
+# allowed pages they may read what comes back.
+#
+# No Origin header means no browser page is behind the request -- curl, a
+# script, the address bar -- and with the server bound to loopback those can
+# only come from this machine.
+
+CONSOLE_ORIGINS = [
+    "https://wadsih-liftoff.org",
+    "https://ai-lift-off.vercel.app",  # the console's Vercel production alias
+]
+ALLOWED_ORIGIN_REGEX = (
+    # Pages served from this machine: the settings page, a console under
+    # local development.
+    r"http://(localhost|127\.0\.0\.1)(:\d+)?"
+    # Preview builds of the console (project ai-lift-off, team
+    # wadsih-ais-projects): ai-lift-<hash>- and ai-lift-off-git-<branch>-.
+    # The team suffix is what keeps this narrow -- Vercel only gives those
+    # hostnames to that team's own deployments, not to anyone with an account.
+    r"|https://ai-lift[a-z0-9-]*-wadsih-ais-projects\.vercel\.app"
+)
+
+
+def origin_allowed(origin: str) -> bool:
+    return origin in CONSOLE_ORIGINS or re.fullmatch(ALLOWED_ORIGIN_REGEX, origin) is not None
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=CONSOLE_ORIGINS,
+    allow_origin_regex=ALLOWED_ORIGIN_REGEX,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# A page can dodge the origin check by pointing its own hostname at 127.0.0.1
+# (DNS rebinding): the browser then sees the bridge as same-origin and sends no
+# Origin at all. The Host header still names the attacker's domain, so only
+# requests addressed to this machine by a loopback name get in.
+app.add_middleware(TrustedHostMiddleware, allowed_hosts=["localhost", "127.0.0.1"])
+
+
+@app.middleware("http")
+async def refuse_foreign_origins(request, call_next):
+    origin = request.headers.get("origin")
+    if origin is not None and not origin_allowed(origin):
+        logger.warning(f"Refused {request.method} {request.url.path} from origin {origin}")
+        return JSONResponse(
+            {"status": "error", "message": "This origin may not use the Reachy bridge."},
+            status_code=403,
+        )
+    return await call_next(request)
 
 
 # ── Request logging (skip noisy polling routes) ──────────────────────
@@ -1689,7 +1756,12 @@ async def get_motors():
 
 # ── Server ────────────────────────────────────────────────────────────
 
-BRIDGE_HOST = "0.0.0.0"
+# Loopback only. The Block Console and the settings page both reach the bridge
+# at http://localhost:8080, so nothing needs it on the network -- and 0.0.0.0
+# put the robot and its camera within reach of every machine on the school's.
+# 127.0.0.1 rather than "localhost": that is the address 0.0.0.0 was being
+# reached on, where "localhost" could bind IPv6-only on some machines.
+BRIDGE_HOST = "127.0.0.1"
 BRIDGE_PORT = 8080
 
 
