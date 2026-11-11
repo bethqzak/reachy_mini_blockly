@@ -50,6 +50,10 @@ def _app_version() -> str:
         return "dev"
 
 
+class OpenConsoleRequest(BaseModel):
+    example: str = ""  # a key of main.EXAMPLES; empty opens the plain console
+
+
 class VoiceKeyRequest(BaseModel):
     key: str = ""
 
@@ -82,7 +86,7 @@ def _refused() -> JSONResponse:
 
 def register_routes(settings_app: FastAPI, reachy_mini) -> None:
     """Attach the settings-page API to the FastAPI instance the SDK provides."""
-    from .main import BLOCK_CONSOLE_URL
+    from .main import BLOCK_CONSOLE_URL, EXAMPLES
 
     @settings_app.get("/api/info")
     def info() -> dict:
@@ -92,6 +96,8 @@ def register_routes(settings_app: FastAPI, reachy_mini) -> None:
             "app": APP_NAME,
             "version": _app_version(),
             "console_url": BLOCK_CONSOLE_URL,
+            "examples": [{"id": key, "name": name, "url": url}
+                         for key, (name, url) in EXAMPLES.items()],
             "bridge_url": f"http://localhost:{bridge.BRIDGE_PORT}",
             "daemon_url": bridge.DAEMON_URL,
             "robot_attached": bridge._connect_reachy_mini() is not None,
@@ -125,8 +131,12 @@ def register_routes(settings_app: FastAPI, reachy_mini) -> None:
         return {"status": "ok", "message": "Key removed.", **voice_chat.key_status()}
 
     @settings_app.post("/api/open-console")
-    def open_console() -> dict:
+    def open_console(req: OpenConsoleRequest | None = None) -> dict:
         """Open the Block Console in a new window of the default browser.
+
+        With `example`, opens the console with that example program loaded.
+        The page names the example and the URL comes from EXAMPLES here, so
+        this can never be made to open an address of someone else's choosing.
 
         The settings page is embedded in the dashboard, which gives a
         target="_blank" link nowhere to go. Opening from this side gets a real
@@ -134,13 +144,19 @@ def register_routes(settings_app: FastAPI, reachy_mini) -> None:
         answer anyway: the console talks to the bridge on localhost, so it only
         ever works from here.
         """
+        url = BLOCK_CONSOLE_URL
+        if req is not None and req.example:
+            if req.example not in EXAMPLES:
+                return {"status": "error", "message": f"Unknown example: {req.example}"}
+            url = EXAMPLES[req.example][1]
+
         def _open() -> None:
             try:
-                webbrowser.open_new(BLOCK_CONSOLE_URL)
+                webbrowser.open_new(url)
             except Exception:
                 log.exception("Could not open the Block Console")
 
         # Launching a browser can block for a second or two; don't hold the
         # request open while it happens.
         threading.Thread(target=_open, name="open_console", daemon=True).start()
-        return {"status": "ok", "url": BLOCK_CONSOLE_URL}
+        return {"status": "ok", "url": url}

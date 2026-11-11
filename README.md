@@ -42,8 +42,9 @@ Python, no terminal and no install steps beyond adding this app.
 | 💬 **Voice chat** | A spoken conversation through the robot's mic and speaker (OpenAI Realtime; needs your own API key) |
 | 🤖 **State** | Head pose, motor status, full robot state |
 
-A settings page in the dashboard (`http://localhost:8042`) shows connection
-status, a live camera preview, and test buttons for speech, wake/sleep and
+A settings page in the dashboard (`http://localhost:8042`) opens the console
+and four example programs (dance, face tracking, AI talk with emotion, voice
+chat), and shows connection status, a live camera preview, and test buttons for speech, wake/sleep and
 volume — so you can check everything works before handing it to a class.
 
 ---

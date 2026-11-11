@@ -31,6 +31,16 @@ logger = logging.getLogger("reachy_mini_blockly")
 # Where students go to build their blocks. Surfaced on the settings page.
 BLOCK_CONSOLE_URL = "https://wadsih-liftoff.org/tools/blocks.html?preset=reachy"
 
+# Ready-made programs, opened from the settings page. Each is the console with
+# a preset loaded. The page sends back only the key; the URL opened is always
+# one of these.
+EXAMPLES = {
+    "dance": ("Dance", "https://wadsih-liftoff.org/tools/blocks?preset=reachy_dance"),
+    "track": ("Face tracking", "https://wadsih-liftoff.org/tools/blocks?preset=reachy_track"),
+    "talk": ("AI talk + emotion", "https://wadsih-liftoff.org/tools/blocks?preset=reachy_talk"),
+    "voice": ("Voice chat", "https://wadsih-liftoff.org/tools/blocks?preset=voice_chat"),
+}
+
 
 class ReachyMiniBlockly(ReachyMiniApp):
     """Serve the Block Console bridge for as long as the app is running."""

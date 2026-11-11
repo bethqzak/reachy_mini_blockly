@@ -58,8 +58,43 @@ async function loadInfo() {
   $("bridgeUrl").textContent = info.bridge_url;
   $("daemonUrl").textContent = info.daemon_url;
   $("consoleLink").href = info.console_url;
+  showExamples(info.examples || []);
   setPill("pillRobot", info.robot_attached && info.media_available);
   return true;
+}
+
+// One button per example program. Like the main console link, these go
+// through the app, which opens the machine's own browser: the dashboard this
+// page is embedded in swallows target="_blank".
+function showExamples(examples) {
+  const box = $("examples");
+  box.textContent = "";
+  for (const ex of examples) {
+    const btn = document.createElement("button");
+    btn.className = "btn";
+    btn.textContent = ex.name + " ↗";
+    btn.addEventListener("click", () => openExample(ex));
+    box.appendChild(btn);
+  }
+  $("examplesCard").hidden = examples.length === 0;
+}
+
+async function openExample(ex) {
+  const el = $("examplesResult");
+  try {
+    const resp = await fetch("api/open-console", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ example: ex.id }),
+    });
+    if (!resp.ok) throw new Error("HTTP " + resp.status);
+    const res = await resp.json();
+    if (res.status !== "ok") throw new Error(res.message);
+    el.textContent = `Opening "${ex.name}" in your browser…`;
+    el.className = "result ok";
+  } catch {
+    window.open(ex.url, "_blank", "noopener");
+  }
 }
 
 function setPill(id, state) {
