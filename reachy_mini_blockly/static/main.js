@@ -70,13 +70,70 @@ function showExamples(examples) {
   const box = $("examples");
   box.textContent = "";
   for (const ex of examples) {
+    // The open button and its copy-link button, joined into one control.
+    const pair = document.createElement("span");
+    pair.className = "pair";
+
     const btn = document.createElement("button");
     btn.className = "btn";
     btn.textContent = ex.name + " ↗";
     btn.addEventListener("click", () => openExample(ex));
-    box.appendChild(btn);
+
+    const copy = document.createElement("button");
+    copy.className = "btn icon";
+    copy.title = `Copy the link to "${ex.name}"`;
+    copy.setAttribute("aria-label", copy.title);
+    copy.innerHTML = COPY_ICON;
+    copy.addEventListener("click", () => copyExampleLink(ex));
+
+    pair.append(btn, copy);
+    box.appendChild(pair);
   }
   $("examplesCard").hidden = examples.length === 0;
+}
+
+const COPY_ICON =
+  '<svg viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none" ' +
+  'stroke="currentColor" stroke-width="1.5" stroke-linejoin="round">' +
+  '<rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/>' +
+  '<path d="M10.5 3.5v-.5a1.5 1.5 0 0 0-1.5-1.5H4A1.5 1.5 0 0 0 2.5 3v5A1.5 1.5 0 0 0 4 9.5h.5"/></svg>';
+
+async function copyText(text) {
+  // The async clipboard API is refused inside an embedded frame unless the
+  // host page grants it, and the dashboard may not. The old selection-based
+  // copy has no such rule, so fall back to it.
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    const box = document.createElement("textarea");
+    box.value = text;
+    box.setAttribute("readonly", "");
+    box.style.position = "fixed";
+    box.style.opacity = "0";
+    document.body.appendChild(box);
+    box.select();
+    let ok = false;
+    try {
+      ok = document.execCommand("copy");
+    } catch {
+      ok = false;
+    }
+    box.remove();
+    return ok;
+  }
+}
+
+async function copyExampleLink(ex) {
+  const el = $("examplesResult");
+  if (await copyText(ex.url)) {
+    el.textContent = `Link to "${ex.name}" copied.`;
+    el.className = "result ok";
+  } else {
+    // Couldn't reach the clipboard: show the link so it can be copied by hand.
+    el.textContent = ex.url;
+    el.className = "result";
+  }
 }
 
 async function openExample(ex) {

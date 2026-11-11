@@ -103,6 +103,20 @@ h1 {
 }
 .btn.primary:hover { filter: brightness(1.08); }
 
+/* An action with a small companion button (open + copy link), drawn as one. */
+.pair { display: inline-flex; }
+.pair .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.pair .btn.icon {
+  border-left: none;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+  padding: 0.55rem 0.6rem;
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+}
+.pair .btn.icon:hover { color: var(--text); }
+
 .row {
   display: flex;
   align-items: center;
@@ -113,7 +127,8 @@ h1 {
 .row.buttons { gap: 0.5rem; }
 .row label { font-size: 0.85rem; color: var(--muted); }
 
-input[type="text"] {
+input[type="text"],
+input[type="password"] {
   flex: 1 1 14rem;
   min-width: 0;
   background: #0d0f14;
@@ -124,7 +139,8 @@ input[type="text"] {
   font: inherit;
   font-size: 0.88rem;
 }
-input[type="text"]:focus { outline: none; border-color: var(--blue); }
+input[type="text"]:focus,
+input[type="password"]:focus { outline: none; border-color: var(--blue); }
 
 input[type="range"] { flex: 1 1 8rem; accent-color: var(--orange); }
 output { font-family: "Space Mono", ui-monospace, Consolas, monospace; font-size: 0.85rem; min-width: 2.2rem; }
