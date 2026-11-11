@@ -59,8 +59,8 @@ header { margin-bottom: 1.3rem; }
   line-height: 1;
   padding: 0.5rem;
   border-radius: 14px;
-  background: var(--yellow);
-  box-shadow: 4px 4px 0 var(--primary);
+  background: var(--blue);
+  box-shadow: 4px 4px 0 var(--orange);
   transform: rotate(-6deg);
 }
 
@@ -149,17 +149,27 @@ h1 {
   font-size: 1rem;
   font-weight: 700;
   padding: 0.75rem 1.3rem;
-  box-shadow: 4px 4px 0 var(--yellow);
+  box-shadow: 4px 4px 0 var(--red);
 }
 .btn.primary:hover:not(:disabled) { background: var(--orange); border-color: var(--orange); }
-.btn.primary:active:not(:disabled) { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--yellow); }
+.btn.primary:active:not(:disabled) { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--red); }
 
 /* For actions that take something away. */
 .btn.danger { --accent: var(--danger); }
 
-/* An action with a small companion button (open + copy link), drawn as one. */
-.pair { display: inline-flex; margin: 0 0.35rem 0.35rem 0; }
-.pair .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; box-shadow: none; }
+/* An action with a small companion button (open + copy link), drawn as one.
+   The shadow belongs to the pair, so it runs under both halves, and the pair
+   sinks as a whole when either is pressed. */
+.pair {
+  display: inline-flex;
+  border-radius: 10px;
+  box-shadow: 3px 3px 0 var(--accent);
+  transition: transform 0.08s, box-shadow 0.08s;
+}
+.pair:active { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--accent); }
+.pair .btn { box-shadow: none; }
+.pair .btn:active:not(:disabled) { transform: none; }
+.pair .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
 .pair .btn.icon {
   border-left: none;
   border-top-left-radius: 0;
@@ -170,8 +180,6 @@ h1 {
   color: var(--accent);
 }
 .pair .btn.icon:hover { color: var(--ink); }
-.pair .btn:active:not(:disabled) { transform: none; }
-.pair .btn.icon:active:not(:disabled) { box-shadow: 3px 3px 0 var(--accent); }
 
 /* One colour per example, so they read as four different things to try. */
 .pair:nth-child(4n + 1) { --accent: var(--purple); }
@@ -186,7 +194,8 @@ h1 {
   margin-bottom: 0.8rem;
   flex-wrap: wrap;
 }
-.row.buttons { gap: 0.7rem; }
+.row.buttons { gap: 0.8rem; }
+.hint + .row { margin-top: 0.9rem; }
 .row label { font-size: 0.85rem; color: var(--muted); font-weight: 600; }
 
 input[type="text"],
