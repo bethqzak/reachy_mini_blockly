@@ -851,10 +851,50 @@ async def _tts_speak_edge(text: str) -> dict:
         tmp_path = f.name
     await communicate.save(tmp_path)
     logger.info(f"edge-tts MP3 saved ({os.path.getsize(tmp_path)} bytes), playing...")
-    # Play in thread so we don't block the event loop
-    loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, _play_mp3_blocking, tmp_path)
+    if not await _play_on_robot(tmp_path):
+        # No robot audio to play through: the computer's own speakers.
+        # In a thread so we don't block the event loop.
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _play_mp3_blocking, tmp_path)
     return {"status": "ok", "message": f"Said: {text}"}
+
+
+# edge-tts's default output is constant-bitrate MP3 at 48 kbit/s
+# (audio-24khz-48kbitrate-mono-mp3), so a file's length in seconds is just its
+# size over this.
+_EDGE_TTS_BYTES_PER_SECOND = 48000 / 8
+
+
+async def _play_on_robot(mp3_path: str) -> bool:
+    """Play speech through the robot's own speaker. False if that isn't possible.
+
+    The OS players in _play_mp3_blocking use the computer's default output
+    device, which on a laptop with a Mini Lite plugged in is the laptop: the
+    robot moved its head while a voice came from somewhere else. The robot
+    handle's play_sound goes to the Reachy Mini Audio card whatever the
+    default is.
+
+    play_sound starts the file and returns, but the console takes the reply
+    as "that block is done", so wait out the speech before answering. Deletes
+    the file when it has played.
+    """
+    media = getattr(_connect_reachy_mini(), "media", None)
+    if media is None or getattr(media, "audio", None) is None:
+        return False
+    try:
+        await asyncio.to_thread(media.play_sound, mp3_path)
+    except Exception as e:
+        logger.warning(f"Robot speaker playback failed, using the computer's: {e}")
+        return False
+    try:
+        # A little over, for the pipeline to start and the last word to land.
+        await asyncio.sleep(os.path.getsize(mp3_path) / _EDGE_TTS_BYTES_PER_SECOND + 0.3)
+    finally:
+        try:
+            os.unlink(mp3_path)
+        except OSError:
+            pass  # still held open by the player; the temp dir will clear it
+    return True
 
 
 def _tts_speak_fallback(text: str) -> dict:
