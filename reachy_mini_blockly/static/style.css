@@ -1,153 +1,222 @@
 /* WADSIH Reachy Blocks — settings page.
-   Palette follows the desktop launcher: orange -> blue on a dark ground. */
+   WADSIH Lift-Off colours on a dark ground. Every card carries one of them as
+   its accent (set with an a-* class), and its heading, outline and buttons
+   pick it up through --accent. */
 :root {
-  --bg: #0f1116;
-  --card: #181b23;
-  --line: #262a35;
-  --orange: #ff8a3d;
-  --blue: #4d9dff;
-  --green: #34d399;
-  --red: #f87171;
-  --amber: #fbbf24;
-  --text: #e6e8ee;
-  --muted: #9aa0ad;
+  --bg: #0d0e14;
+  --card: #171922;
+  --well: #0b0c11;      /* inputs, pills, code: a step darker than the card */
+  --line: #343949;
+
+  --primary: #f45f10;
+  --red: #e53d28;
+  --orange: #fe7900;
+  --blue: #758bfd;
+  --green: #50ceae;
+  --purple: #b383e2;
+  --yellow: #ffe730;
+  --danger: #f87171;
+
+  --text: #f4f5f9;
+  --muted: #b1b6c4;
+  --ink: #14151c;       /* text on a coloured fill */
+
+  --accent: var(--blue);
 }
+
+.a-orange { --accent: var(--orange); }
+.a-blue   { --accent: var(--blue); }
+.a-green  { --accent: var(--green); }
+.a-purple { --accent: var(--purple); }
+.a-yellow { --accent: var(--yellow); }
 
 * { box-sizing: border-box; }
 
 body {
   margin: 0;
   font-family: "Space Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  background: radial-gradient(1000px 500px at 50% -10%, #1e2230, var(--bg));
+  background:
+    radial-gradient(700px 320px at 0% -5%, rgba(244, 95, 16, 0.20), transparent 70%),
+    radial-gradient(700px 320px at 100% -5%, rgba(117, 139, 253, 0.20), transparent 70%),
+    var(--bg);
+  background-repeat: no-repeat;
   color: var(--text);
   min-height: 100vh;
 }
 
 .wrap { max-width: 680px; margin: 0 auto; padding: 1.5rem 1.2rem 3rem; }
 
+a { color: var(--blue); }
+
+:focus-visible { outline: 3px solid var(--yellow); outline-offset: 2px; }
+
 /* ── Header ─────────────────────────────────────────────── */
 
-header { margin-bottom: 1.2rem; }
-.title { display: flex; align-items: center; gap: 0.7rem; }
-.brick { font-size: 2.2rem; }
+header { margin-bottom: 1.3rem; }
+.title { display: flex; align-items: center; gap: 0.8rem; }
+.brick {
+  font-size: 1.9rem;
+  line-height: 1;
+  padding: 0.5rem;
+  border-radius: 14px;
+  background: var(--yellow);
+  box-shadow: 4px 4px 0 var(--primary);
+  transform: rotate(-6deg);
+}
 
 h1 {
-  font-size: 1.35rem;
+  font-size: 1.7rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
   margin: 0;
-  background: linear-gradient(90deg, var(--orange), var(--blue));
+  background: linear-gradient(90deg, var(--orange), var(--yellow) 45%, var(--blue));
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
-.sub { color: var(--muted); font-size: 0.85rem; margin-top: 0.15rem; }
+.sub { color: var(--muted); font-size: 0.88rem; margin-top: 0.15rem; }
 
 /* ── Cards ──────────────────────────────────────────────── */
 
 .card {
   background: var(--card);
-  border: 1px solid var(--line);
-  border-radius: 14px;
-  padding: 1.1rem 1.2rem;
-  margin-bottom: 1rem;
+  border: 2px solid var(--line);
+  border-top: 5px solid var(--accent);
+  border-radius: 16px;
+  padding: 1.1rem 1.2rem 1.2rem;
+  margin-bottom: 1.1rem;
 }
 
 .card h2 {
-  font-size: 0.78rem;
+  font-size: 0.82rem;
   text-transform: uppercase;
-  letter-spacing: 0.09em;
-  color: var(--muted);
+  letter-spacing: 0.1em;
+  color: var(--accent);
   margin: 0 0 0.8rem;
-  font-weight: 600;
+  font-weight: 700;
 }
 
-.cta { border-color: rgba(255, 138, 61, 0.35); }
-.lead { margin: 0 0 0.9rem; font-size: 0.95rem; }
+.cta {
+  border-color: var(--primary);
+  background: linear-gradient(135deg, rgba(244, 95, 16, 0.16), rgba(117, 139, 253, 0.10)), var(--card);
+}
+.lead { margin: 0 0 0.9rem; font-size: 1.02rem; font-weight: 600; }
 
-.hint { color: var(--muted); font-size: 0.82rem; line-height: 1.5; margin: 0.7rem 0 0; }
-.note p { font-size: 0.85rem; line-height: 1.6; color: var(--muted); margin: 0 0 0.7rem; }
+.hint { color: var(--muted); font-size: 0.84rem; line-height: 1.5; margin: 0.7rem 0 0; }
+.hint strong, .note strong { color: var(--text); }
+
+.note { border-style: dashed; border-top-style: solid; }
+.note p { font-size: 0.86rem; line-height: 1.6; color: var(--muted); margin: 0 0 0.7rem; }
+.note p:last-child { margin-bottom: 0; }
 .note code {
-  background: #0d0f14;
+  background: var(--well);
   border: 1px solid var(--line);
   border-radius: 5px;
   padding: 0.1rem 0.35rem;
   font-family: "Space Mono", ui-monospace, Consolas, monospace;
   font-size: 0.85em;
-  color: var(--blue);
+  color: var(--yellow);
 }
 
 /* ── Buttons & inputs ───────────────────────────────────── */
 
+/* Outlined in the card's accent, with a hard offset shadow that the button
+   sinks into when pressed: chunky, like the blocks. */
 .btn {
   display: inline-block;
-  background: #222633;
+  background: var(--card);
   color: var(--text);
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  padding: 0.55rem 0.95rem;
+  border: 2px solid var(--accent);
+  border-radius: 10px;
+  padding: 0.5rem 0.95rem;
   font: inherit;
   font-size: 0.88rem;
+  font-weight: 600;
   cursor: pointer;
   text-decoration: none;
-  transition: border-color 0.15s, background 0.15s;
+  box-shadow: 3px 3px 0 var(--accent);
+  transition: transform 0.08s, box-shadow 0.08s, background 0.15s, color 0.15s;
 }
-.btn:hover:not(:disabled) { border-color: var(--blue); background: #262b3a; }
-.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn:hover:not(:disabled) { background: var(--accent); color: var(--ink); }
+.btn:active:not(:disabled) { transform: translate(3px, 3px); box-shadow: 0 0 0 var(--accent); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; box-shadow: none; }
 
 .btn.primary {
-  background: linear-gradient(90deg, var(--orange), var(--blue));
-  border: none;
-  color: #0f1116;
-  font-weight: 600;
-  padding: 0.7rem 1.2rem;
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--ink);
+  font-size: 1rem;
+  font-weight: 700;
+  padding: 0.75rem 1.3rem;
+  box-shadow: 4px 4px 0 var(--yellow);
 }
-.btn.primary:hover { filter: brightness(1.08); }
+.btn.primary:hover:not(:disabled) { background: var(--orange); border-color: var(--orange); }
+.btn.primary:active:not(:disabled) { transform: translate(4px, 4px); box-shadow: 0 0 0 var(--yellow); }
+
+/* For actions that take something away. */
+.btn.danger { --accent: var(--danger); }
 
 /* An action with a small companion button (open + copy link), drawn as one. */
-.pair { display: inline-flex; }
-.pair .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; }
+.pair { display: inline-flex; margin: 0 0.35rem 0.35rem 0; }
+.pair .btn:first-child { border-top-right-radius: 0; border-bottom-right-radius: 0; box-shadow: none; }
 .pair .btn.icon {
   border-left: none;
   border-top-left-radius: 0;
   border-bottom-left-radius: 0;
-  padding: 0.55rem 0.6rem;
+  padding: 0.5rem 0.6rem;
   display: inline-flex;
   align-items: center;
-  color: var(--muted);
+  color: var(--accent);
 }
-.pair .btn.icon:hover { color: var(--text); }
+.pair .btn.icon:hover { color: var(--ink); }
+.pair .btn:active:not(:disabled) { transform: none; }
+.pair .btn.icon:active:not(:disabled) { box-shadow: 3px 3px 0 var(--accent); }
+
+/* One colour per example, so they read as four different things to try. */
+.pair:nth-child(4n + 1) { --accent: var(--purple); }
+.pair:nth-child(4n + 2) { --accent: var(--green); }
+.pair:nth-child(4n + 3) { --accent: var(--blue); }
+.pair:nth-child(4n + 4) { --accent: var(--yellow); }
 
 .row {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  margin-bottom: 0.7rem;
+  gap: 0.7rem;
+  margin-bottom: 0.8rem;
   flex-wrap: wrap;
 }
-.row.buttons { gap: 0.5rem; }
-.row label { font-size: 0.85rem; color: var(--muted); }
+.row.buttons { gap: 0.7rem; }
+.row label { font-size: 0.85rem; color: var(--muted); font-weight: 600; }
 
 input[type="text"],
 input[type="password"] {
   flex: 1 1 14rem;
   min-width: 0;
-  background: #0d0f14;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  padding: 0.55rem 0.7rem;
+  background: var(--well);
+  border: 2px solid var(--line);
+  border-radius: 10px;
+  padding: 0.5rem 0.7rem;
   color: var(--text);
   font: inherit;
   font-size: 0.88rem;
 }
 input[type="text"]:focus,
-input[type="password"]:focus { outline: none; border-color: var(--blue); }
+input[type="password"]:focus { outline: none; border-color: var(--accent); }
+input::placeholder { color: #7d8394; }
 
-input[type="range"] { flex: 1 1 8rem; accent-color: var(--orange); }
-output { font-family: "Space Mono", ui-monospace, Consolas, monospace; font-size: 0.85rem; min-width: 2.2rem; }
+input[type="range"] { flex: 1 1 8rem; accent-color: var(--accent); }
+output {
+  font-family: "Space Mono", ui-monospace, Consolas, monospace;
+  font-size: 0.85rem;
+  min-width: 2.2rem;
+  color: var(--accent);
+  font-weight: 700;
+}
 
-.result { font-size: 0.82rem; margin: 0.6rem 0 0; min-height: 1.2em; color: var(--muted); }
+.result { font-size: 0.84rem; margin: 0.6rem 0 0; min-height: 1.2em; color: var(--muted); }
 .result.ok { color: var(--green); }
-.result.err { color: var(--red); }
+.result.err { color: var(--danger); }
 
 /* ── Status pills ───────────────────────────────────────── */
 
@@ -156,18 +225,22 @@ output { font-family: "Space Mono", ui-monospace, Consolas, monospace; font-size
 .pill {
   display: inline-flex;
   align-items: center;
-  gap: 0.4rem;
-  background: #0d0f14;
-  border: 1px solid var(--line);
+  gap: 0.45rem;
+  background: var(--well);
+  border: 2px solid var(--line);
   border-radius: 999px;
-  padding: 0.3rem 0.75rem;
-  font-size: 0.8rem;
+  padding: 0.3rem 0.8rem;
+  font-size: 0.82rem;
+  font-weight: 600;
 }
+.pill:has(.dot.ok) { border-color: var(--green); }
+.pill:has(.dot.bad) { border-color: var(--danger); }
+.pill:has(.dot.wait) { border-color: var(--yellow); }
 
-.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
-.dot.ok { background: var(--green); }
-.dot.bad { background: var(--red); }
-.dot.wait { background: var(--amber); }
+.dot { width: 10px; height: 10px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.ok { background: var(--green); box-shadow: 0 0 8px var(--green); }
+.dot.bad { background: var(--danger); }
+.dot.wait { background: var(--yellow); }
 
 .kv {
   display: grid;
@@ -184,9 +257,9 @@ output { font-family: "Space Mono", ui-monospace, Consolas, monospace; font-size
 .preview { margin-top: 0.6rem; }
 #camImage {
   width: 100%;
-  border-radius: 10px;
-  border: 1px solid var(--line);
+  border-radius: 12px;
+  border: 2px solid var(--accent);
   display: block;
-  background: #0d0f14;
+  background: var(--well);
 }
 #camImage[hidden] { display: none; }
