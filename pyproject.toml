@@ -37,6 +37,9 @@ dependencies = [
     "opencv-python>=4.8,<5",
     "edge-tts",   # primary TTS: free Microsoft neural voices, no API key
     "pyttsx3",    # fallback TTS on Linux when edge-tts has no internet
+    # Voice chat: the OpenAI Realtime connection. 13 is where the
+    # websockets.asyncio client the session uses first shipped.
+    "websockets>=13",
 ]
 
 [project.optional-dependencies]

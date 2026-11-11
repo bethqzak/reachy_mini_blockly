@@ -39,6 +39,7 @@ Python, no terminal and no install steps beyond adding this app.
 | 📸 **Camera** | Grab a snapshot as an image the console can display |
 | 👀 **Face tracking** | OpenCV face detection; the head follows the nearest face |
 | 🔊 **Audio** | Volume, test sound, "is someone speaking?" |
+| 💬 **Voice chat** | A spoken conversation through the robot's mic and speaker (OpenAI Realtime; needs your own API key) |
 | 🤖 **State** | Head pose, motor status, full robot state |
 
 A settings page in the dashboard (`http://localhost:8042`) shows connection
@@ -57,6 +58,21 @@ volume — so you can check everything works before handing it to a class.
 
 No API keys, no accounts. The emotions and dances datasets are public, so no
 `HF_TOKEN` is needed.
+
+### Voice chat (optional)
+
+The **Voice Chat** blocks are the one exception: they talk to OpenAI, so they
+need an OpenAI API key. Paste it into the **Voice chat** card on the settings
+page (`http://localhost:8042`) and use **Test voice chat** to check it.
+
+- The key is saved on that computer, in `~/.reachy_mini_blockly/`, and is
+  never sent to the Block Console or shown again. The page only confirms its
+  last four characters.
+- Talking is charged to the key by the minute. Use a key from a project with
+  a spending limit. A chat ends by itself after 5 minutes, and whenever the
+  app is stopped.
+- The robot doesn't listen while it is speaking, so wait for it to finish
+  before you answer.
 
 ---
 
@@ -96,8 +112,8 @@ The bridge is a FastAPI server that listens on `localhost` only and answers
 only to the Block Console and to pages served from the same computer (such as
 the settings page). Almost every block becomes a proxied
 call to the daemon's own REST API, which is what keeps this thin and keeps it
-working across SDK upgrades. Only text to speech and camera snapshots are
-implemented here, because the daemon has no route for them. Face tracking is
+working across SDK upgrades. Only text to speech, camera snapshots and voice
+chat are implemented here, because the daemon has no route for them. Face tracking is
 also done in-app (OpenCV on frames from the app's robot handle) even though
 the daemon has shipped its own tracker since SDK 1.9: the in-app tracker also
 feeds the "face detected?" and "face position" blocks, which need the face
@@ -119,8 +135,9 @@ dashboard replaces all of that, so the app edition drops:
 - the tkinter GUI, the PyInstaller build and the first-run `uv` bootstrapper
 - the daemon subprocess and its MuJoCo simulator fallback — the dashboard owns
   the daemon now
-- voice chat and the conversation-app proxy — only one app can hold the robot
-  at a time, so those blocks cannot work while this app is running
+- the conversation-app proxy — only one app can hold the robot at a time, so
+  it cannot run alongside this one. Voice chat is built in instead
+  (`voice_chat.py`), using the robot handle this app already holds
 
 Everything else behaves the same, and the console needs no changes.
 

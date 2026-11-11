@@ -4,8 +4,8 @@ Reachy Mini Bridge Server for the Block Console.
 A loopback-only FastAPI server that proxies the Block Console
 (https://wadsih-liftoff.org/tools/blocks.html?preset=reachy) to the Reachy Mini
 daemon REST API on localhost:8000, adding the few things the daemon has no
-route for: text-to-speech and camera snapshots. Face tracking is also done
-here, with OpenCV, even though the daemon has had its own tracker since SDK
+route for: text-to-speech, camera snapshots and voice chat (voice_chat.py).
+Face tracking is also done here, with OpenCV, even though the daemon has had its own tracker since SDK
 1.9 (POST /api/media/tracking/enable, GET /api/media/tracking/face): the
 blocks need face coordinates as well as a head that follows, and the daemon's
 FaceTarget only reports them while its tracker is driving the head.
@@ -46,6 +46,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+
+from . import voice_chat
 
 logger = logging.getLogger("reachy_mini_blockly.bridge")
 
@@ -163,6 +165,11 @@ class VolumeRequest(BaseModel):
 
 class SetCameraRequest(BaseModel):
     index: int = 0
+
+
+class VoiceChatStartRequest(BaseModel):
+    voice: Optional[str] = None         # an OpenAI Realtime voice name
+    instructions: Optional[str] = None  # the assistant's system prompt
 
 
 class AntennaRequest(BaseModel):
@@ -1117,6 +1124,7 @@ async def lifespan(app: FastAPI):
     yield
 
     # Cleanup
+    await voice_chat.stop()  # hang up, so a stopped app can't leave a paid session open
     _stop_head_tracking()
     _tts_executor.shutdown(wait=False)
     await http_client.aclose()
@@ -1195,7 +1203,9 @@ async def refuse_foreign_origins(request, call_next):
 
 _QUIET_PATHS = {"/status", "/volume", "/face_detected", "/face_position",
                 "/speech_detected", "/state", "/head_pose", "/motors",
-                "/camera"}
+                "/camera", "/voice_chat/status",
+                "/voice_chat/last_user_message",
+                "/voice_chat/last_assistant_message", "/voice_chat/transcript"}
 
 @app.middleware("http")
 async def log_requests(request, call_next):
@@ -1679,6 +1689,42 @@ async def start_recording():
 @app.post("/stop_recording")
 async def stop_recording():
     return {"status": "error", "message": "Direct microphone recording not available via daemon REST API."}
+
+
+# ── Voice chat ────────────────────────────────────────────────────────
+# The Voice Chat blocks. The session itself -- OpenAI Realtime, with the
+# robot's own mic and speaker -- lives in voice_chat.py; these are just its
+# doors. None of them takes or returns the API key: that is set on the
+# settings page (port 8042), out of the console's reach.
+
+@app.post("/voice_chat/start")
+async def voice_chat_start(req: VoiceChatStartRequest):
+    return await voice_chat.start(_connect_reachy_mini(), req.voice, req.instructions)
+
+
+@app.post("/voice_chat/stop")
+async def voice_chat_stop():
+    return await voice_chat.stop()
+
+
+@app.get("/voice_chat/status")
+async def voice_chat_status():
+    return voice_chat.status()
+
+
+@app.get("/voice_chat/last_user_message")
+async def voice_chat_last_user_message():
+    return voice_chat.last_message("user")
+
+
+@app.get("/voice_chat/last_assistant_message")
+async def voice_chat_last_assistant_message():
+    return voice_chat.last_message("assistant")
+
+
+@app.get("/voice_chat/transcript")
+async def voice_chat_transcript():
+    return voice_chat.transcript()
 
 
 # ── Robot state ───────────────────────────────────────────────────────

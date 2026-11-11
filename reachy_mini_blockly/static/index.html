@@ -29,6 +29,11 @@
         Opens in a new tab. Pick the <strong>Reachy Mini</strong> block category,
         and your blocks will drive this robot.
       </p>
+      <p class="hint">
+        <strong>On a Mac?</strong> Use <strong>Chrome</strong> or
+        <strong>Edge</strong> for the Block Console. Safari often can't reach
+        the robot, and the blocks do nothing.
+      </p>
     </section>
 
     <section class="card">
@@ -80,6 +85,30 @@
         <img id="camImage" alt="Live camera preview from Reachy Mini" hidden />
         <p class="hint" id="camHint">Preview is off.</p>
       </div>
+    </section>
+
+    <section class="card">
+      <h2>Voice chat</h2>
+      <p class="hint">
+        The <strong>Voice Chat</strong> blocks hold a spoken conversation through
+        the robot's microphone and speaker, using OpenAI. They need an
+        <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">OpenAI API key</a>,
+        and each minute of talking is charged to it, so use a key with a spending
+        limit. A chat ends by itself after 5 minutes.
+      </p>
+
+      <div class="row">
+        <input id="voiceKey" type="password" placeholder="sk-…" autocomplete="off"
+               spellcheck="false" aria-label="OpenAI API key" />
+        <button class="btn" id="voiceKeySave">Save key</button>
+        <button class="btn" id="voiceKeyRemove" hidden>Remove</button>
+      </div>
+      <p class="hint" id="voiceKeyHint">Checking…</p>
+
+      <div class="row buttons">
+        <button class="btn" id="voiceTest" disabled>Test voice chat</button>
+      </div>
+      <p class="result" id="voiceResult" role="status"></p>
     </section>
 
     <section class="card note">
