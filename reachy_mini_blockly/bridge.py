@@ -97,10 +97,12 @@ _SAY_TEXT_ENV = "REACHY_BLOCKS_SAY_TEXT"
 _reachy_mini = None
 _reachy_mini_lock = threading.Lock()
 
-# ── Direct OpenCV camera (fallback when SDK IPC gives no frames) ─────
-_cv_cap = None
-_cv_cap_lock = threading.Lock()
-_use_direct_cv = False  # set True after SDK IPC fails
+# ── Camera frames ────────────────────────────────────────────────────
+# One reader at a time. The console's camera block, the settings preview and
+# the tracking loop can all ask for a frame in the same instant, each from its
+# own worker thread, and the handle's GStreamer pipeline is not something to
+# pull on from three threads at once.
+_frame_lock = threading.Lock()
 
 # ── Head tracking state ──────────────────────────────────────────────
 # In-app tracker. The daemon's own (SDK 1.9+, /api/media/tracking/*) would be
@@ -908,92 +910,32 @@ def _connect_reachy_mini():
         return _reachy_mini
 
 
-def _open_direct_camera():
-    """Open the camera directly via OpenCV after releasing daemon media."""
-    global _cv_cap, _use_direct_cv
-    import cv2
-    with _cv_cap_lock:
-        if _cv_cap is not None and _cv_cap.isOpened():
-            return _cv_cap
-
-        # Tell daemon to release camera hardware so we can grab it
-        robot = _connect_reachy_mini()
-        if robot is not None and not robot.media_released:
-            try:
-                robot.release_media()
-                logger.info("Released daemon media for direct camera access")
-            except Exception as e:
-                logger.warning(f"Failed to release daemon media: {e}")
-
-        # Try camera indices 0..2
-        for idx in range(3):
-            cap = cv2.VideoCapture(idx)
-            if cap.isOpened():
-                ret, frame = cap.read()
-                if ret and frame is not None:
-                    _cv_cap = cap
-                    _use_direct_cv = True
-                    logger.info(f"Direct OpenCV camera opened (index {idx})")
-                    return _cv_cap
-                cap.release()
-
-        logger.error("No camera found via OpenCV")
-        return None
-
-
-def _release_camera():
-    """Release the direct-OpenCV capture, if we ever opened one.
-
-    The SDK handle itself is owned by the app framework, so it is only detached
-    here (via set_robot(None) in the app's finally block), never closed.
-    """
-    global _cv_cap, _use_direct_cv
-    with _cv_cap_lock:
-        if _cv_cap is not None:
-            _cv_cap.release()
-            _cv_cap = None
-            _use_direct_cv = False
-
-
-_sdk_camera_retries = 0  # track consecutive None frames from SDK
-
 def _get_frame() -> "np.ndarray | None":
-    """Get a camera frame, trying SDK first then falling back to direct OpenCV."""
-    global _sdk_camera_retries
+    """The latest frame from the robot's camera, or None if there isn't one.
 
-    # If we already switched to direct OpenCV, use it
-    if _use_direct_cv:
-        with _cv_cap_lock:
-            if _cv_cap is not None and _cv_cap.isOpened():
-                ret, frame = _cv_cap.read()
-                return frame if ret else None
-        return None
+    None is a momentary thing -- the pipeline hasn't delivered yet, or the
+    read fell between two frames -- and every caller polls, so they just ask
+    again next tick.
 
-    # Try SDK IPC first
+    There is deliberately no fallback to opening a camera device directly.
+    The bridge used to switch to cv2.VideoCapture after three empty reads in
+    a row, which at the console's 5 fps is 600 ms of hiccup, and the switch
+    was a trap: it told the daemon to release its media (camera *and* audio,
+    for the rest of the session), probed device indices and could land on
+    the laptop's own webcam, and when nothing opened the camera was simply
+    gone. A feed that had been working stopped with "No frame available" and
+    never came back. The handle the app framework gives us is the camera;
+    if it has no frame, the honest answer is "not right now".
+    """
     robot = _connect_reachy_mini()
-    if robot is not None:
-        try:
-            frame = robot.media.get_frame()
-            if frame is not None:
-                _sdk_camera_retries = 0
-                return frame
-        except Exception as e:
-            logger.warning(f"SDK camera read failed: {e}")
-
-        _sdk_camera_retries += 1
-
-        # No reconnect step here (unlike the desktop build): the handle belongs
-        # to the app framework, so we can't rebuild its GStreamer pipeline.
-
-        # After 3 consecutive failures, fall back to direct OpenCV
-        if _sdk_camera_retries >= 3:
-            logger.info("SDK camera returned no frames after retries, switching to direct OpenCV")
-            cap = _open_direct_camera()
-            if cap is not None:
-                ret, frame = cap.read()
-                return frame if ret else None
-
-    return None
+    if robot is None:
+        return None
+    try:
+        with _frame_lock:
+            return robot.media.get_frame()
+    except Exception as e:
+        logger.warning(f"Camera read failed: {e}")
+        return None
 
 
 def _capture_frame_blocking() -> dict:
@@ -1001,7 +943,10 @@ def _capture_frame_blocking() -> dict:
     frame = _get_frame()
 
     if frame is None:
-        return {"status": "error", "message": "No frame available from Reachy Mini camera"}
+        if _connect_reachy_mini() is None:
+            return {"status": "error",
+                    "message": "No robot attached. Start Reachy Blocks from the dashboard to use the camera."}
+        return {"status": "error", "message": "No frame from the robot camera just now. Try again."}
 
     try:
         import cv2
@@ -1165,15 +1110,14 @@ async def lifespan(app: FastAPI):
     loop = asyncio.get_event_loop()
     await loop.run_in_executor(_tts_executor, _tts_init)
 
-    # SDK connection is now lazy — created on first /camera request
-    # to avoid stale GStreamer pipelines from early startup timing
+    # The robot handle (camera) is attached separately by set_robot(); the
+    # bridge opens nothing of its own.
 
     logger.info(f"Bridge started, proxying to daemon at {DAEMON_URL}")
     yield
 
     # Cleanup
     _stop_head_tracking()
-    _release_camera()
     _tts_executor.shutdown(wait=False)
     await http_client.aclose()
     logger.info("Bridge stopped")
